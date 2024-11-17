@@ -69,6 +69,10 @@ struct State {
     index_buffer: wgpu::Buffer,
     index_count: u32,
     texture_bind_group: wgpu::BindGroup,
+    projection: Projection,
+    projection_buffer: wgpu::Buffer,
+    projection_bind_group: wgpu::BindGroup,
+    camera: Camera,
 }
 
 impl State {
@@ -114,7 +118,6 @@ impl State {
         };
 
         let texture_bind_group_layout = device.create_bind_group_layout(&Texture::BIND_GROUP_LAYOUT_DESCRIPTOR);
-
         let trollface = Texture::from_bytes(
             &device,
             &queue,
@@ -122,6 +125,50 @@ impl State {
             Some("Trollface"),
         );
         let trollface_bind_group = trollface.create_bind_group(&device, &texture_bind_group_layout);
+
+        let projection_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Projection Bind Group Layout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX,
+                    count: None,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                },
+            ],
+        });
+        let camera = Camera(na::Isometry3::look_at_rh(
+            &na::Point3::new(0.0, 1.0, 2.0),
+            &na::Point3::new(0.0, 0.0, 0.0),
+            &na::Vector3::y(),
+        ));
+        let projection = Projection {
+            aspect: WINDOW_SIZE.width as f32 / WINDOW_SIZE.height as f32,
+            fovy: 45.0,
+            z_near: 0.1,
+            z_far: 100.0,
+        };
+        let mvp = projection.to_matrix() * camera.0.to_matrix();
+        dbg!(&mvp);
+        let projection_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Projection Buffer"),
+            contents: bytemuck::bytes_of(&mvp),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+        let projection_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Projection Bind Group"),
+            layout: &projection_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: projection_buffer.as_entire_binding(),
+                },
+            ],
+        });
 
         let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Vertex Buffer"),
@@ -141,7 +188,7 @@ impl State {
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: None,
-            bind_group_layouts: &[&texture_bind_group_layout],
+            bind_group_layouts: &[&texture_bind_group_layout, &projection_bind_group_layout],
             push_constant_ranges: &[],
         });
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -193,6 +240,10 @@ impl State {
             index_buffer,
             index_count,
             texture_bind_group: trollface_bind_group,
+            projection,
+            projection_buffer,
+            projection_bind_group,
+            camera,
         }
     }
 
@@ -223,6 +274,7 @@ impl State {
         });
         render_pass.set_pipeline(&self.pipeline);
         render_pass.set_bind_group(0, &self.texture_bind_group, &[]);
+        render_pass.set_bind_group(1, &self.projection_bind_group, &[]);
         render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
         render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
         render_pass.draw_indexed(0..self.index_count, 0, 0..1);
@@ -431,8 +483,11 @@ const OPENGL_TO_WGPU_MATRIX: na::Matrix4<f32> = na::Matrix4::new(
 
 const SAFE_FRAC_PI_2: f32 = FRAC_PI_2 - 0.0001;
 
+#[derive(Debug)]
 struct Camera(na::Isometry3<f32>);
 
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
 struct Projection {
     aspect: f32,
     fovy: f32,

@@ -8,10 +8,13 @@ struct Fragment {
     @location(0) tex_coords: vec2<f32>,
 }
 
+@group(1) @binding(0)
+var<uniform> mvp: mat4x4<f32>;
+
 @vertex
 fn vs_main(vertex: Vertex) -> Fragment {
     var fragment: Fragment;
-    fragment.pos = vec4(vertex.pos, 1.0);
+    fragment.pos = mvp * vec4(vertex.pos, 1.0);
     fragment.tex_coords = vertex.tex_coords;
     return fragment;
 }
