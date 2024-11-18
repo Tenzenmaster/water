@@ -1,10 +1,15 @@
-use std::{
-    f32::consts::FRAC_PI_2,
-    sync::Arc,
-};
+#![allow(dead_code)]
 
-use bytemuck::{Pod, Zeroable};
-use image::GenericImageView as _;
+mod camera;
+mod texture;
+mod vertex;
+
+use camera::*;
+use texture::*;
+use vertex::*;
+
+use std::sync::Arc;
+
 use nalgebra as na;
 use pollster::FutureExt as _;
 use wgpu::util::DeviceExt as _;
@@ -182,12 +187,12 @@ impl State {
 
         let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Vertex Buffer"),
-            contents: bytemuck::cast_slice(&TextureVertex::RECT_VERTICES),
+            contents: bytemuck::cast_slice(&TextureVertex::SQUARE_VERTICES),
             usage: wgpu::BufferUsages::VERTEX,
         });
         let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Index Buffer"),
-            contents: bytemuck::cast_slice(&TextureVertex::RECT_INDICES),
+            contents: bytemuck::cast_slice(&TextureVertex::SQUARE_INDICES),
             usage: wgpu::BufferUsages::INDEX,
         });
         let index_count = 6;
@@ -267,6 +272,7 @@ impl State {
     fn resize(&mut self, size: PhysicalSize<u32>) {
         self.config.width = size.width;
         self.config.height = size.height;
+        self.projection.aspect = size.width as f32 / size.height as f32;
         self.surface.configure(&self.device, &self.config);
     }
 
@@ -309,295 +315,5 @@ impl State {
     }
 
     fn update(&mut self) {
-        
-    }
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, Pod, Zeroable)]
-struct ColorVertex {
-    pos: [f32; 3],
-    color: [f32; 3],
-}
-
-impl ColorVertex {
-    const LAYOUT: wgpu::VertexBufferLayout<'static> = wgpu::VertexBufferLayout {
-        array_stride: size_of::<Self>() as u64,
-        step_mode: wgpu::VertexStepMode::Vertex,
-        attributes: &[
-            wgpu::VertexAttribute {
-                format: wgpu::VertexFormat::Float32x3,
-                offset: 0,
-                shader_location: 0,
-            },
-            wgpu::VertexAttribute {
-                format: wgpu::VertexFormat::Float32x3,
-                offset: size_of::<[f32; 3]>() as u64,
-                shader_location: 1,
-            },
-        ],
-    };
-
-    const TRIANGLE_VERTICES: [Self; 3] = [
-        Self { pos: [0.0, 0.5, 0.0], color: [1.0, 0.0, 0.0] },
-        Self { pos: [-0.5, -0.5, 0.0], color: [0.0, 1.0, 0.0] },
-        Self { pos: [0.5, -0.5, 0.0], color: [0.0, 0.0, 1.0] },
-    ];
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, Pod, Zeroable)]
-struct TextureVertex {
-    pos: [f32; 3],
-    tex_coords: [f32; 2],
-}
-
-impl TextureVertex {
-    const LAYOUT: wgpu::VertexBufferLayout<'static> = wgpu::VertexBufferLayout {
-        array_stride: size_of::<Self>() as u64,
-        step_mode: wgpu::VertexStepMode::Vertex,
-        attributes: &[
-            wgpu::VertexAttribute {
-                format: wgpu::VertexFormat::Float32x3,
-                offset: 0,
-                shader_location: 0,
-            },
-            wgpu::VertexAttribute {
-                format: wgpu::VertexFormat::Float32x2,
-                offset: size_of::<[f32; 3]>() as u64,
-                shader_location: 1,
-            },
-        ],
-    };
-
-    const RECT_VERTICES: [Self; 4] = [
-        Self { pos: [0.5, 0.5, 0.0], tex_coords: [1.0, 0.0] },
-        Self { pos: [-0.5, 0.5, 0.0], tex_coords: [0.0, 0.0] },
-        Self { pos: [-0.5, -0.5, 0.0], tex_coords: [0.0, 1.0] },
-        Self { pos: [0.5, -0.5, 0.0], tex_coords: [1.0, 1.0] },
-    ];
-
-    const RECT_INDICES: [u16; 6] = [
-        0, 1, 2,
-        0, 2, 3,
-    ];
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, Pod, Zeroable)]
-struct ModelVertex {
-    position: [f32; 3],
-    uv: [f32; 2],
-    normal: [f32; 3],
-}
-
-impl ModelVertex {
-    const LAYOUT: wgpu::VertexBufferLayout<'static> = wgpu::VertexBufferLayout {
-        array_stride: size_of::<Self>() as u64,
-        step_mode: wgpu::VertexStepMode::Vertex,
-        attributes: &[
-            wgpu::VertexAttribute {
-                format: wgpu::VertexFormat::Float32x3,
-                offset: 0,
-                shader_location: 0,
-            },
-            wgpu::VertexAttribute {
-                format: wgpu::VertexFormat::Float32x2,
-                offset: size_of::<[f32; 3]>() as u64,
-                shader_location: 1,
-            },
-            wgpu::VertexAttribute {
-                format: wgpu::VertexFormat::Float32x3,
-                offset: size_of::<[f32; 5]>() as u64,
-                shader_location: 2,
-            },
-        ],
-    };
-}
-
-struct Texture {
-    texture: wgpu::Texture,
-    view: wgpu::TextureView,
-    sampler: wgpu::Sampler,
-}
-
-impl Texture {
-    fn from_bytes(
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        bytes: &[u8],
-        label: Option<&str>,
-    ) -> Self {
-        let image = image::load_from_memory(bytes)
-            .expect("Failed to load image from memory");
-        Self::from_image(device, queue, &image, label)
-    }
-
-    fn from_image(
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        image: &image::DynamicImage,
-        label: Option<&str>,
-    ) -> Self {
-        let rgba = image.to_rgba8();
-        let dimensions = image.dimensions();
-        let size = wgpu::Extent3d {
-            width: dimensions.0,
-            height: dimensions.1,
-            depth_or_array_layers: 1,
-        };
-
-        let texture = device.create_texture(&wgpu::TextureDescriptor {
-            label,
-            size,
-            format: wgpu::TextureFormat::Rgba8UnormSrgb,
-            dimension: wgpu::TextureDimension::D2,
-            mip_level_count: 1,
-            sample_count: 1,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
-        });
-        queue.write_texture(
-            wgpu::ImageCopyTexture {
-                texture: &texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            &rgba,
-            wgpu::ImageDataLayout {
-                offset: 0,
-                bytes_per_row: Some(size.width * 4),
-                rows_per_image: Some(size.height),
-            },
-            size,
-        );
-
-        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-
-        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label,
-            address_mode_u: wgpu::AddressMode::ClampToEdge,
-            address_mode_v: wgpu::AddressMode::ClampToEdge,
-            address_mode_w: wgpu::AddressMode::ClampToEdge,
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Nearest,
-            mipmap_filter: wgpu::FilterMode::Nearest,
-            ..Default::default()
-        });
-
-        Self {
-            texture,
-            view,
-            sampler,
-        }
-    }
-
-    fn create_bind_group(&self, device: &wgpu::Device, layout: &wgpu::BindGroupLayout) -> wgpu::BindGroup {
-        device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Texture Bind Group"),
-            layout: &layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&self.view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&self.sampler),
-                },
-            ],
-        })
-    }
-
-    const BIND_GROUP_LAYOUT_DESCRIPTOR: wgpu::BindGroupLayoutDescriptor<'static> = wgpu::BindGroupLayoutDescriptor {
-        label: Some("Texture Bind Group Layout"),
-        entries: &[
-            wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                count: None,
-                ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                    view_dimension: wgpu::TextureViewDimension::D2,
-                    multisampled: false,
-                }
-            },
-            wgpu::BindGroupLayoutEntry {
-                binding: 1,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                count: None,
-                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-            },
-        ],
-    };
-
-    fn create_depth_texture(device: &wgpu::Device, config: &wgpu::SurfaceConfiguration, label: Option<&str>) -> Self {
-        let size = wgpu::Extent3d {
-            width: config.width,
-            height: config.height,
-            depth_or_array_layers: 1,
-        };
-
-        let texture = device.create_texture(&wgpu::TextureDescriptor {
-            label,
-            size,
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: Self::DEPTH_FORMAT,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
-            view_formats: &[],
-        });
-        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label,
-            address_mode_u: wgpu::AddressMode::ClampToEdge,
-            address_mode_v: wgpu::AddressMode::ClampToEdge,
-            address_mode_w: wgpu::AddressMode::ClampToEdge,
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            mipmap_filter: wgpu::FilterMode::Nearest,
-            compare: Some(wgpu::CompareFunction::LessEqual),
-            lod_min_clamp: 0.0,
-            lod_max_clamp: 100.0,
-            ..Default::default()
-        });
-
-        Self {
-            texture,
-            view,
-            sampler,
-        }
-    }
-
-    const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
-}
-
-#[rustfmt::skip]
-const OPENGL_TO_WGPU_MATRIX: na::Matrix4<f32> = na::Matrix4::new(
-    1.0, 0.0, 0.0, 0.0,
-    0.0, 1.0, 0.0, 0.0,
-    0.0, 0.0, 0.5, 0.5,
-    0.0, 0.0, 0.0, 1.0,
-);
-
-const SAFE_FRAC_PI_2: f32 = FRAC_PI_2 - 0.0001;
-
-#[derive(Debug)]
-struct Camera(na::Isometry3<f32>);
-
-#[repr(C)]
-#[derive(Clone, Copy, Pod, Zeroable)]
-struct Projection {
-    aspect: f32,
-    fovy: f32,
-    z_near: f32,
-    z_far: f32,
-}
-
-impl Projection {
-    fn to_matrix(&self) -> na::Matrix4<f32> {
-        OPENGL_TO_WGPU_MATRIX * na::Matrix4::new_perspective(self.aspect, self.fovy, self.z_near, self.z_far)
     }
 }
